@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS servicos (
     id              SERIAL PRIMARY KEY,
-    nome            VARCHAR(80) NOT NULL,
+    nome            VARCHAR(80) NOT NULL UNIQUE,
     duracao_min     INTEGER NOT NULL DEFAULT 30 CHECK (duracao_min > 0),
     preco           NUMERIC(8, 2) NOT NULL CHECK (preco >= 0),
     ativo           BOOLEAN NOT NULL DEFAULT TRUE
@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS clientes (
     telefone        VARCHAR(20) UNIQUE NOT NULL,
     email           VARCHAR(120) UNIQUE,
     senha_hash      TEXT,
-    criado_em       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    criado_em       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS agendamentos (
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS agendamentos (
     horario         TIME NOT NULL,
     status          VARCHAR(20) NOT NULL DEFAULT 'pendente' 
                     CHECK (status IN ('pendente', 'confirmado', 'cancelado', 'concluido')),
-    criado_em       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    criado_em       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Impede dois agendamentos ativos no mesmo dia e horário
