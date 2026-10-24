@@ -67,8 +67,11 @@
                             </div>
                             <div class="field">
                                 <label>Horário</label>
-                                <input type="time" name="horario" required>
+                                <select name="horario" required>
+                                    <option value="">Escolha a data primeiro</option>
+                                </select>
                             </div>
+
                             <button class="btn btn-accent" type="submit" style="width: 100%">Solicitar agendamento</button>
                             <p class="form-note" id="agendaMsg"></p>
                         </form>
@@ -78,6 +81,10 @@
             <script>
                 const form = document.getElementById('agendaForm');
                 const msg = document.getElementById('agendaMsg');
+                const inputData = form.elements['data'];
+                const selHorario = form.elements['horario'];
+
+                inputData.min = new Date().toLocaleDateString('sv-SE');
 
                 async function carregarServicos() {
                     const select = form.elements['servico_id'];
@@ -94,7 +101,31 @@
                         msg.textContent = 'Não foi possível carregar os serviços.'
                     }
                 }
+
+                async function carregarHorarios() {
+                    msg.textContent = '',
+                    selHorario.replaceChildren(new Option(
+                        inputData.value ? 'Carregando...' : 'Escolha a data primeiro', ''
+                    ));
+                    if (!inputData.value) return;
+
+                    try {
+                        const r = await fetch('/api/horarios?data=' + inputData.value);
+                        const horarios = await r.json();
+                        if (!r.ok) throw new Error(horarios.erro || 'Erro ao carregar horários');
+
+                        selHorario.replaceChildren(new Option(
+                            horarios.length ? 'Selecione' : 'Sem horários neste dia', ''
+                        ));
+                        horarios.forEach(h => selHorario.append(new Option(h, h)));
+                    } catch (e) {
+                        selHorario.replaceChildren(new Option('Erro ao carregar', ''));
+                        msg.textContent = '✗ ' + e.message;
+                    }
+                }
+
                 carregarServicos();
+                inputData.addEventListener('change', carregarHorarios);
 
                 form.addEventListener('submit', async (e) => {
                     e.preventDefault();
@@ -110,9 +141,12 @@
                         });
                         const d = await r.json();
                         if (!r.ok) throw new Error(d.erro || 'Erro ao enviar');
-                        msg.textContent = '✓ Agendamento solicitado! Entraremos em contato para confirmar.';
+
                         form.reset();
+                        await carregarHorarios();
+                        msg.textContent = '✓ Agendamento solicitado! Entraremos em contato para confirmar.';
                     } catch (err) {
+                        await carregarHorarios();
                         msg.textContent = '✗ ' + err.message;
                     } finally {
                         btn.disabled = false;

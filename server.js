@@ -6,6 +6,73 @@ const pool = require('./db');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// --------- Regras de funcionamento ---------
+const ABERTURA = '09:00';
+const FECHAMENTO = '19:00';       // o último horário começa 30 min antes
+const INTERVALO_MIN = 30;
+const DIAS_ABERTOS = [1, 2, 3, 4, 5, 6];    // 0 = domingo, 1 = segunda ... 6 = sábado.
+
+// Data e hora atuais no Brasil, independentemente do fuso do servidor
+function agoraBrasil() {
+  const partes = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date());
+
+  const p = Object.fromEntries(partes.map(x => [x.type, x.value]));
+  return { data: `${p.year}-${p.month}-${p.day}`, hora: `${p.hour}:${p.minute}` };
+}
+
+// Confere se a data existe de verdade
+function dataValida(data) {
+  const [hi, mi] = ABERTURA.split(':').map(Number);
+  const [hf, mf] = FECHAMENTO.split(':').map(Number);
+  const lista = [];
+  for (let m = hi * 60 + mi; m < hf * 60 + mf; m += INTERVALO_MIN) {
+    lista.push(
+      String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0')
+    );
+  }
+  return lista;
+}
+
+// Horários do dia que ainda estão livres.
+function gerarHorarios() {
+  const [hi, mi] = ABERTURA.split(':').map(Number);
+  const [hf, mf] = FECHAMENTO.split(':').map(Number);
+  const lista = [];
+  for (let m = hi * 60 + mi; m < hf * 60 + mf; m += INTERVALO_MIN) {
+    lista.push(
+      String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0')
+    );
+  }
+  return lista;
+}
+
+async function horariosLivres(data) {
+  const diaSemana = new Date(data + 'T12:00:00Z').getUTCDay();
+  if (!DIAS_ABERTOS.includes(diaSemana)) return [];
+
+  const agora = agoraBrasil();
+  if (data < agora.data) return [];
+
+  const ocupados = await pool.query(
+    `SELECT to_char(horario, 'HH24:MI') AS horario FROM agendamentos
+    WHERE data = $1 AND status <> 'cancelado'`,
+    [data]
+  );
+  const set = new Set(ocupados.rows.map(r => r.horario));
+
+  return gerarHorarios().filter(
+    h => !set.has(h) && !(data === agora.data && h <= agora.hora)
+  );
+}
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -44,7 +111,15 @@ app.post('/api/agendamentos', async (req, res) => {
     return res.status(400).json({ erro: 'Telefone inválido. Use DDD + número.' });
   }
 
+  if (!dataValida(data)) {
+    return res.status(400).json({ erro: 'Data inválida.'});
+  }
+
   try {
+    const livres = await horariosLivres(data);
+    if (!livres.includes(horario)) {
+      return res.status(409).json({ erro: 'Esse horário não está disponível. Escolha outro.'});
+    }
     const servico = await pool.query (
       'SELECT id FROM servicos WHERE id = $1 AND ativo',
       [servico_id]
@@ -100,6 +175,19 @@ app.get('/api/admin/agendamentos', exigirAdmin, async (req, res) => {
     }
     console.error('Erro ao listar agendamentos:', error);
     res.status(500).json({ erro: 'Erro ao listar agendamentos.' });
+  }
+});
+
+app.get('/api/horarios', async (req, res) => {
+  const { data } = req.query;
+  if (!dataValida(data)) {
+    return res.status(400).json({ erro: 'Data inválida.' });
+  }
+  try {
+    res.json(await horariosLivres(data));
+  } catch (error) {
+    console.error('Erro ao buscar horários:', error);
+    res.status(500).json({ erro: 'Erro ao buscar horários.' });
   }
 });
 
