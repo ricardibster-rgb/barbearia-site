@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de agendamentos</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        .painel { max-width: 960px; margin: 0 auto; padding: 45px 20px; }
+        .painel h1 { font-family: "Playfair Display", serif; font-size: 2.4rem; margin: 20px 0; }
+        .barra { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin-bottom: 20px; }
+        .barra .field { margin: 0; }
+        .tabela-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 14px; }
+        th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--line-soft); font-size: .9rem; }
+        th { color: var(--accent); font-size: .75rem; text-transform: uppercase; letter-spacing: 1.5px; }
+        .acoes { display: flex; gap: 6px; flex-wrap: wrap; }
+        .status-pendente { color: #fbbf24; }
+        .status-confirmado { color: #4ade80; }
+        .status-cancelado { color: #f87171; }
+        .status-concluido { color: var(--muted); }
+        #aviso { margin-top: 14px; color: #7dd3fc; font-weight: 700; }
+    </style>
+</head>
+<body>
+    <main class=painel">
+        <a href="index.html" class="btn btn-ghost">← Voltar ao site</a>
+        <h1>Painel de agendamentos</h1>
+
+        <div class="barra">
+            <div class="field">
+                <label for="filtroData">Filtrar por data</label>
+                <input type="date" id="filtroData">
+            </div>
+            <button class="btn btn-ghost" id="btnTodos">Ver todos</button>
+            <button class="btn btn-ghost" id="btnSair">Sair</button>
+        </div>
+
+        <div class="tabela-wrap">
+            <table>
+                <thead>
+                    <tr><th>Data</th><th>Hora</th><th>Cliente</th><th>Telefone</th><th>Serviço</th><th>Ações</th></tr>
+                </thead>
+                <tbody id="corpo"></tbody>
+            </table>
+        </div>
+        <div id="aviso"></div>
+    </main>
+    <script>
+        const corpo = document.getElementById('corpo');
+        const aviso = document.getElementById('aviso');
+        const filtro = document.getElementById('filtroData');
+        
+        function pegarSenha() {
+            let s = sessionStorage.getItem('adminSenha');
+            if (!s) {
+                s = prompt('Senha do painel:');
+                if (s) sessionStorage.setItem('adminSenha', s);
+            }
+            return s;
+        }
+
+        async function chamarApi(url, opcoes = {}) {
+            const senha = pegarSenha();
+            if (!senha) throw new Error('Senha necessária.');
+            const r = await fetch(url, {
+                ...opcoes,
+                headers: { 'Content-Type': 'application/json', 'x-admin-password': senha }
+            });
+            if (r.status === 401) {
+                sessionStorage.removeItem('adminSenha');
+                throw new Error('Senha incorreta. Atualize a página e tente de novo.');
+            }
+            const dados = await r.json();
+            if (!r.ok) throw new Error(dados.erro || 'Erro na requisição');
+            return dados;
+        }
+
+        function dataBR(iso) {
+            const [a, m, d] = iso.split('-');
+            return `${d}/${m}/${a}`;
+        }
+
+        function celula(texto, classe) {
+            const td = document.createElement('td');
+            td.textContent = texto;
+            if (classe) td.className = classe;
+            return td;
+        }
+
+        function botao(rotulo, status, id) {
+            const b = document.createElement('button');
+            b.className = 'mini-btn';
+            b.textContent = rotulo;
+            b.onclick = () => mudarStatus(id, status);
+            return b;
+        }
+
+        async function carregar() {
+            aviso.textContent = '';
+            try {
+                const url = filtro.value ? `/api/admin/agendamentos?data=${filtro.value}` : '/api/admin/agendamentos';
+                const lista = await chamarApi(url);
+                corpo.replaceChildren();
+                if (!lista.length) { aviso.textContent = 'Nenhum agendamento encontrado'; return; }
+
+                lista.forEach(a => {
+                    const tr = document.createElement('tr');
+                    tr.append(
+                        celula(dataBR(a.data)), celula(a.horario), celula(a.nome),
+                        celula(a.telefone), celula(a.servico), celula(a.status, 'status-' + a.status)    
+                    );
+                    const td = document.createElement('td');
+                    td.className = 'acoes';
+                    if (a.status === 'pendente') td.append(botao('Confirmar', 'confirmado', a.id));
+                    if (a.status === 'pendente' || a.status === 'confirmado') td.append(botao('Cancelar', 'cancelado', a.id));
+                    if (a.status === 'confirmado') td.append(botao('Concluir', 'concluido', a.id));
+                    tr.append(td);
+                    corpo.append(tr);
+                });
+            } catch (e) {
+                aviso.textContent = '✗ ' + e.message;
+            }
+        }
+
+        async function mudarStatus(id, status) {
+            try {
+                await chamarApi(`/api/admin/agendamentos/${id}/status`, {
+                    method: 'PATCH', body: JSON.stringify({ status })
+                });
+                carregar();
+            } catch (e) {
+                aviso.textContent = '✗ ' + e.message;
+            }
+        }
+
+        filtro.addEventListener('change', carregar);
+        document.getElementById('btnTodos').onclick = () => { filtro.value = ''; carregar(); };
+        document.getElementById('btnSair').onclick = () => { sessionStorage.removeItem('adminSenha'); location.reload(); };
+        carregar();
+    </script>
+</body>
+</html>
