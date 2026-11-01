@@ -75,7 +75,7 @@
         <main class="admin">
             <a href="index.html" class="btn btn-ghost">← Voltar ao site</a>
             <h1 style="margin-top:22px">Painel Administrativo</h1>
-            <p>Cadastre as informações da barbearia. Elas serão usadas automaticamente no site e ficam salvas neste navegador.</p>
+            <p>Cadastre as informações da barbearia. Elas serão usadas automaticamente no site e ficam salvas.</p>
             <form id="form" class="panel">
                 <div class="grid">
                     <div class="field">
@@ -136,44 +136,66 @@
 		</main>
 
 		<script>
+            const form = document.getElementById("form");
+            const msg = document.getElementById("msg");
 
-			const form=document.getElementById("form");
-			const preencher=()=>{
+            function pegarSenha() {
+                let s = sessionStorage.getItem("adminSenha");
+                if (!s) {
+                s = prompt("Senha do painel:");
+                if (s) sessionStorage.setItem("adminSenha", s);
+                }
+                return s;
+            }
 
-				const c=getConfig();
+            function preencher(c) {
+                Object.keys(c).forEach(k => {
+                if (form.elements[k]) form.elements[k].value = c[k];
+                });
+            }
 
-				Object.keys(c).forEach(k=>{
+            async function salvar(dados) {
+                const senha = pegarSenha();
+                if (!senha) throw new Error("Senha necessária.");
 
-					if(form.elements[k])form.elements[k].value=c[k]
+                const r = await fetch("/api/admin/config", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json", "x-admin-password": senha },
+                body: JSON.stringify(dados)
+                });
+                if (r.status === 401) {
+                sessionStorage.removeItem("adminSenha");
+                throw new Error("Senha incorreta. Tente salvar de novo.");
+                }
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.erro || "Erro ao salvar");
+            }
 
-				})
+            configPronta.then(preencher);
 
-			};
+            form.addEventListener("submit", async e => {
+                e.preventDefault();
+                msg.textContent = "Salvando...";
+                try {
+                await salvar(Object.fromEntries(new FormData(form)));
+                msg.textContent = "✓ Informações salvas! Abra o site para conferir.";
+                } catch (err) {
+                msg.textContent = "✗ " + err.message;
+                }
+            });
 
-			preencher();
-
-			form.addEventListener("submit",e=>{
-
-				e.preventDefault();
-
-				saveConfig(Object.fromEntries(new FormData(form)));
-
-				document.getElementById("msg").textContent="✓ Informações salvas! Agora abra o site novamente.";
-
-			});
-
-			document.getElementById("reset").onclick=()=>{
-
-				saveConfig(DEFAULT_CONFIG);
-
-				preencher();
-
-				document.getElementById("msg").textContent="Configurações restauradas.";
-
-			};
-
-		</script>
-
+            document.getElementById("reset").onclick = async () => {
+                if (!confirm("Restaurar todas as informações para o padrão?")) return;
+                msg.textContent = "Restaurando...";
+                try {
+                await salvar(DEFAULT_CONFIG);
+                preencher(DEFAULT_CONFIG);
+                msg.textContent = "Configurações restauradas.";
+                } catch (err) {
+                msg.textContent = "✗ " + err.message;
+                }
+            };
+        </script>
 	</body>
 
 </html>

@@ -37,3 +37,8 @@ INSERT INTO servicos (nome, duracao_min, preco) VALUES
   ('Barba', 30, 30.00),
   ('Corte + Barba', 60, 65.00)
 ON CONFLICT (nome) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS configuracoes (
+  chave   VARCHAR(40) PRIMARY KEY,
+  valor   TEXT NOT NULL DEFAULT ''
+);

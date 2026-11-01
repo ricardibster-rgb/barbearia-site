@@ -220,6 +220,58 @@ app.patch('/api/admin/agendamentos/:id/status', exigirAdmin, async (req, res) =>
   }
 });
 
+const CAMPOS_CONFIG = [
+  'nome', 'slogan', 'telefone', 'whatsapp', 'endereco', 'horarios',
+  'instagram', 'facebook', 'foto_url', 'lat', 'lng'
+];
+const CAMPOS_URL = ['instagram', 'facebook', 'foto_url'];
+
+app.get('/api/config', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT chave, valor FROM configuracoes');
+    res.json(Object.fromEntries(r.rows.map(x => [x.chave, x.valor])))
+  } catch (error) {
+    console.error('Erro ao buscar configurações:', error);
+    res.status(500).json({ erro: 'Erro ao buscar configurações.' })
+  }
+})
+
+app.put('/api/admin/config', exigirAdmin, async (req, res) => {
+  const corpo = req.body || {};
+  const chaves = [];
+  const valores = [];
+
+  for (const k of CAMPOS_CONFIG) {
+    if (!(k in corpo)) continue;
+    const v = String(corpo[k] ?? '').trim().slice(0, 500);
+
+    if (CAMPOS_URL.includes(k) && v && !/^https?:\/\//i.test(v)) {
+      return res.status(400).json({ erro: `O campo ${k} deve começar com http:// ou https://`})
+    }
+    if (k === 'lat' && v && !(Math.abs(Number(v)) <= 90)) {
+      return res.status(400).json({ erro: 'Latitude inválida' });
+    }
+    if (k === 'lng' && v && !(Math.abs(Number(v)) <= 180)) {
+      return res.status(400).json({ erro: 'Longitude inválida' });
+    }
+
+    chaves.push(k);
+    valores.push(v);
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO configuracoes (chave, valor) SELECT * FROM unnest($1::text[], $2::text[])
+      ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor`,
+      [chaves, valores]
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Erro ao salvar configurações:', error);
+    res.status(500).json({ erro: 'Erro ao salvar configurações.' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Rodando em http://localhost:${PORT}`);
 });

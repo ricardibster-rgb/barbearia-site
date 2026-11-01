@@ -403,7 +403,7 @@
     }, {threshold:.12});
     document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
 
-    carregarConfig();
+    configPronta.then(carregarConfig);
   </script>
 </body>
 </html>
