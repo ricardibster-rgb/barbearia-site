@@ -1,7 +1,14 @@
 require ('dotenv').config();
+if (!process.env.JWT_SECRET) {
+  console.error('Defina JWT_SECRET no arquivo .env');
+  process.exit(1);
+}
 const express = require('express');
 const path = require('path');
 const pool = require('./db');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -73,7 +80,38 @@ async function horariosLivres(data) {
   );
 }
 
+const COOKIE = 'sessao';
+const SETE_DIAS = 7 * 24 * 60 * 60 * 1000;
+
+function criarSessao(res, clienteId) {
+  const token = jwt.sign({ id: clienteId }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  res.cookie(COOKIE, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: SETE_DIAS,
+  });
+}
+
+function lerSessao(req, res, next) {
+  try {
+    req.clienteId = jwt.verify(req.cookies[COOKIE], process.env.JWT_SECRET).id;
+  } catch {
+    req.clienteId = null; 
+  }
+  next();
+}
+app.use(lerSessao);
+
+function exigirLogin (req, res, next) {
+  if (!req.clienteId) return res.status(401).json({ erro: 'Faça login para continuar.' });
+  next()
+}
+
+
+
 app.use(express.json());
+app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
 function exigirAdmin(req, res, next) {
@@ -269,6 +307,102 @@ app.put('/api/admin/config', exigirAdmin, async (req, res) => {
   } catch (error) {
     console.error('Erro ao salvar configurações:', error);
     res.status(500).json({ erro: 'Erro ao salvar configurações.' });
+  }
+});
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+/;
+const HASH_FALSO = bcrypt.hashSync('senha-falsa-para-igualar-o-tempo', 10);
+
+app.post('/api/auth/cadastro', async (req, res) => {
+  const { nome, telefone, email, senha } = req.body || {};
+  const nomeOk = typeof nome === 'string' ? nome.trim() : '';
+  const tel = typeof telefone === 'string' ? telefone.replace(/\D/g, '') : '';
+  const mail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+
+  if (!nomeOk || !tel || !mail || typeof senha !== 'string') {
+    return res.status(400).json({ erro: 'Preencha todos os campos.' });
+  }
+  if (tel.length < 10 || tel.length > 11) {
+    return res.status(400).json({ erro: 'Telefone inválido. Use DDD + número.' });
+  }
+  if (!EMAIL_RE.test(mail) || mail.length > 120) {
+    return res.status(400).json({ erro: 'E-mail inválido.' });
+  }
+  if (senha.length < 8 || senha.length > 15) {
+    return res.status(400).json({ erro: 'A senha deve ter de 8 a 15 caracteres.' });
+  }
+  try {
+    const hash = await bcrypt.hash(senha, 10);
+
+    const r = await pool.query(
+      `INSERT INTO clientes (nome, telefone, email, senha_hash)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (telefone) DO UPDATE
+         SET nome = EXCLUDED.nome, email = EXCLUDED.email, senha_hash = EXCLUDED.senha_hash
+         WHERE clientes.senha_hash IS NULL
+       RETURNING id`,
+      [nomeOk.slice(0, 100), tel, mail, hash]
+    );
+
+    if (r.rowCount === 0) {
+      return res.status(409).json({ erro: 'Já existe uma conta com esse telefone.' });
+    }
+    criarSessao(res, r.rows[0].id);
+    res.status(201).json({ ok: true });
+  } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ erro: 'Esse e-mail já está cadastrado.' });
+    }
+    console.error('Erro no cadastro:', error);
+    res.status(500).json({ erro: 'Erro ao criar conta.' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const { email, senha } = req.body || {};
+  if (typeof email !== 'string' || typeof senha !== 'string' || !email.trim() || !senha) {
+    return res.status(400).json({ erro: 'Informe e-mail e senha.' });
+  }
+
+  try {
+    const r = await pool.query(
+      'SELECT id, nome, senha_hash FROM clientes WHERE email = $1',
+      [email.trim().toLowerCase()]
+    );
+    const cliente = r.rows[0];
+    const confere = await bcrypt.compare(senha, cliente?.senha_hash || HASH_FALSO);
+
+    if (!cliente || !cliente.senha_hash || !confere) {
+      return res.status(401).json({ erro: 'E-mail ou senha incorretos.' });
+    }
+    criarSessao(res, cliente.id);
+    res.json({ nome: cliente.nome });
+  } catch (error) {
+    console.error('Erro no login:', error);
+    res.status(500).json({ erro: 'Erro ao entrar.' });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie(COOKIE);
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/eu', async (req, res) => {
+  if (!req.clienteId) return res.status(401).json({ erro: 'Não autenticado.' });
+  try {
+    const r = await pool.query(
+      'SELECT id, nome, telefone, email FROM clientes WHERE id = $1',
+      [req.clienteId]
+    );
+    if (r.rowCount === 0) {
+      res.clearCookie(COOKIE);
+      return res.status(401).json({ erro: 'Não autenticado.' });
+    }
+    res.json(r.rows[0]);
+  } catch (error) {
+    console.error('Erro ao buscar cliente:', error);
+    res.status(500).json({ erro: 'Erro ao buscar dados.' });
   }
 });
 
