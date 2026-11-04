@@ -52,23 +52,45 @@ function gerarHorarios() {
   return lista;
 }
 
-async function horariosLivres(data) {
+const aMin = h => {
+  const [hh, mm] = h.split(':').map(Number);
+  return hh * 60 + mm;
+};
+
+async function buscarServico(id) {
+  const r = await pool.query(
+    'SELECT id, duracao_min FROM servicos WHERE id = $1 AND ativo',
+    [id]
+  );
+  return r.rows[0] || null;
+}
+
+async function horariosLivres(data, duracaoMin) {
   const diaSemana = new Date(data + 'T12:00:00Z').getUTCDay();
   if (!DIAS_ABERTOS.includes(diaSemana)) return [];
 
   const agora = agoraBrasil();
   if (data < agora.data) return [];
 
-  const ocupados = await pool.query(
-    `SELECT to_char(horario, 'HH24:MI') AS horario FROM agendamentos
-    WHERE data = $1 AND status <> 'cancelado'`,
+  const r = await pool.query(
+    `SELECT to_char(horario, 'HH24:MI') AS horario, duracao_min
+     FROM agendamentos
+     WHERE data = $1 AND status <> 'cancelado'`,
     [data]
   );
-  const set = new Set(ocupados.rows.map(r => r.horario));
+  const ocupados = r.rows.map(x => ({
+    ini: aMin(x.horario),
+    fim: aMin(x.horario) + x.duracao_min,
+  }));
+  const fechamento = aMin(FECHAMENTO);
 
-  return gerarHorarios().filter(
-    h => !set.has(h) && !(data === agora.data && h <= agora.hora)
-  );
+  return gerarHorarios().filter(h => {
+    const ini = aMin(h);
+    const fim = ini + duracaoMin;
+    if (fim > fechamento) return false;                          
+    if (data === agora.data && h <= agora.hora) return false;    
+    return !ocupados.some(o => ini < o.fim && fim > o.ini);     
+  });
 }
 
 const COOKIE = 'sessao';
@@ -137,28 +159,25 @@ app.post('/api/agendamentos', exigirLogin, async (req, res) => {
   }
 
   try {
-    const livres = await horariosLivres(data);
+    const servico = await buscarServico(servico_id);
+    if (!servico) {
+      return res.status(400).json({ erro: 'Serviço inválido.' });
+    }
+
+    const livres = await horariosLivres(data, servico.duracao_min);
     if (!livres.includes(horario)) {
       return res.status(409).json({ erro: 'Esse horário não está disponível. Escolha outro.' });
     }
 
-    const servico = await pool.query(
-      'SELECT id FROM servicos WHERE id = $1 AND ativo',
-      [servico_id]
-    );
-    if (servico.rowCount === 0) {
-      return res.status(400).json({ erro: 'Serviço inválido.' });
-    }
-
     const agendamento = await pool.query(
-      `INSERT INTO agendamentos (cliente_id, servico_id, data, horario)
-       VALUES ($1, $2, $3, $4) RETURNING id`,
-      [req.clienteId, servico_id, data, horario]
+      `INSERT INTO agendamentos (cliente_id, servico_id, data, horario, duracao_min)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [req.clienteId, servico.id, data, horario, servico.duracao_min]
     );
 
     res.status(201).json({ id: agendamento.rows[0].id });
   } catch (error) {
-    if (error.code === '23505') {
+    if (error.code === '23505' || error.code === '23P01') {
       return res.status(409).json({ erro: 'Esse horário já está ocupado. Escolha outro.' });
     }
     if (error.code === '22P02') {
@@ -198,13 +217,18 @@ app.get('/api/admin/agendamentos', exigirAdmin, async (req, res) => {
 });
 
 app.get('/api/horarios', async (req, res) => {
-  const { data } = req.query;
+  const { data, servico_id } = req.query;
   if (!dataValida(data)) {
     return res.status(400).json({ erro: 'Data inválida.' });
   }
   try {
-    res.json(await horariosLivres(data));
+    const servico = await buscarServico(servico_id);
+    if (!servico) return res.status(400).json({ erro: 'Serviço inválido.' });
+    res.json(await horariosLivres(data, servico.duracao_min));
   } catch (error) {
+    if (error.code === '22P02') {
+      return res.status(400).json({ erro: 'Serviço inválido.' });
+    }
     console.error('Erro ao buscar horários:', error);
     res.status(500).json({ erro: 'Erro ao buscar horários.' });
   }
@@ -228,7 +252,7 @@ app.patch('/api/admin/agendamentos/:id/status', exigirAdmin, async (req, res) =>
     }
     res.json({ ok: true });
   } catch (error) {
-    if (error.code === '23505') {
+    if (error.code === '23505' || error.code === '23P01') {
       return res.status(409).json({ erro: 'Esse horário já foi ocupado por outro agendamento.' });
     }
     if (error.code === '22P02') {

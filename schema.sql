@@ -21,15 +21,16 @@ CREATE TABLE IF NOT EXISTS agendamentos (
     servico_id      INTEGER NOT NULL REFERENCES servicos(id),
     data            DATE NOT NULL,
     horario         TIME NOT NULL,
-    status          VARCHAR(20) NOT NULL DEFAULT 'pendente' 
+    duracao_min     INTEGER NOT NULL CHECK (duracao_min > 0),
+    status          VARCHAR(20) NOT NULL DEFAULT 'pendente'
                     CHECK (status IN ('pendente', 'confirmado', 'cancelado', 'concluido')),
-    criado_em       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+    criado_em       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
--- Impede dois agendamentos ativos no mesmo dia e horário
-CREATE UNIQUE INDEX IF NOT EXISTS agendamento_horario_unico
-  ON agendamentos (data, horario)
-  WHERE status <> 'cancelado';
+    -- Dois agendamentos ativos não podem ocupar o mesmo intervalo de tempo
+    CONSTRAINT agendamento_sem_sobreposicao EXCLUDE USING gist (
+        tsrange(data + horario, data + horario + make_interval(mins => duracao_min)) WITH &&
+    ) WHERE (status <> 'cancelado')
+);
 
 -- Serviços iniciais (ajuste os preços)
 INSERT INTO servicos (nome, duracao_min, preco) VALUES

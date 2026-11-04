@@ -70,7 +70,7 @@
                         <div class="field">
                             <label>Horário</label>
                             <select name="horario" required>
-                                <option value="">Escolha a data primeiro</option>
+                                <option value="">Escolha o serviço e a data</option>
                             </select>
                         </div>
 
@@ -98,6 +98,7 @@
 
             const inputData = form.elements['data'];
             const selHorario = form.elements['horario'];
+            const selServico = form.elements['servico_id'];
 
             inputData.min = new Date().toLocaleDateString('sv-SE');
 
@@ -109,7 +110,7 @@
                     servicos.forEach(s => {
                         const op = document.createElement('option');
                         op.value = s.id;
-                        op.textContent = `${s.nome} - R$ ${Number(s.preco).toFixed(2).replace('.', ',')}`;
+                        op.textContent = `${s.nome} — R$ ${Number(s.preco).toFixed(2).replace('.', ',')} (${s.duracao_min} min)`;
                         select.appendChild(op);
                     });
                 } catch (e) {
@@ -118,19 +119,20 @@
             }
 
             async function carregarHorarios() {
-                msg.textContent = '',
-                    selHorario.replaceChildren(new Option(
-                        inputData.value ? 'Carregando...' : 'Escolha a data primeiro', ''
-                    ));
-                if (!inputData.value) return;
+                msg.textContent = '';
+                if (!inputData.value || !selServico.value) {
+                    selHorario.replaceChildren(new Option('Escolha o serviço e a data', ''));
+                    return;
+                }
+                selHorario.replaceChildren(new Option('Carregando...', ''));
 
                 try {
-                    const r = await fetch('/api/horarios?data=' + inputData.value);
+                    const r = await fetch(`/api/horarios?data=${inputData.value}&servico_id=${selServico.value}`);
                     const horarios = await r.json();
                     if (!r.ok) throw new Error(horarios.erro || 'Erro ao carregar horários');
 
                     selHorario.replaceChildren(new Option(
-                        horarios.length ? 'Selecione' : 'Sem horários neste dia', ''
+                        horarios.length ? 'Selecione' : 'Sem horários disponíveis', ''
                     ));
                     horarios.forEach(h => selHorario.append(new Option(h, h)));
                 } catch (e) {
@@ -141,6 +143,7 @@
 
             carregarServicos();
             inputData.addEventListener('change', carregarHorarios);
+            selServico.addEventListener('change', carregarHorarios);
 
             form.addEventListener('submit', async (e) => {
                 e.preventDefault();
