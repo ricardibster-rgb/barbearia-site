@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#07111f">
+    <title>Meus agendamentos</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700;800&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="config.js"></script>
+    <style>
+        .lista { display: grid; gap: 14px; max-width: 760px; margin: 0 auto; }
+        .ag { background: var(--card); border: 1px solid var(--line-soft); border-radius: 18px; padding: 22px;
+              display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+        .ag h3 { font-size: 1.05rem; margin-bottom: 4px; }
+        .ag p { color: var(--muted); font-size: .9rem; margin-bottom: 6px; }
+        .tag { font-size: .72rem; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; }
+        .status-pendente { color: #fbbf24; }
+        .status-confirmado { color: #4ade80; }
+        .status-cancelado { color: #f87171; }
+        .status-concluido { color: var(--muted); }
+        #aviso { max-width: 760px; margin: 0 auto 16px; color: #7dd3fc; font-weight: 700; }
+        .novo { max-width: 760px; margin: 24px auto 0; }
+    </style>
+</head>
+
+<body>
+    <nav id="nav">
+        <div class="container nav-inner">
+            <a href="index.html" class="brand">
+                <div class="pole"></div><strong><span>Barber</span>Book</strong>
+            </a>
+            <div class="nav-links"><a href="index.html">Início</a><a href="sobre.html">Sobre</a><a
+                    href="informacoes.html">Informações</a><a href="localizacao.html">Localização</a></div>
+            <div class="nav-actions"><a href="login.html" class="btn btn-ghost">Entrar</a><a href="agendamento.html"
+                    class="btn btn-accent">Agendar horário</a>
+                <button class="menu-toggle" id="menuToggle">☰</button>
+            </div>
+        </div>
+        <div class="nav-mobile" id="navMobile"><a href="index.html">Início</a><a href="sobre.html">Sobre</a><a
+                href="informacoes.html">Informações</a><a href="localizacao.html">Localização</a><a
+                href="agendamento.html">Agendar horário</a></div>
+    </nav>
+    <main>
+        <section class="page-hero">
+            <div class="container reveal">
+                <div class="section-kicker">Área do cliente</div>
+                <h1>Meus <span>agendamentos</span></h1>
+                <p>Acompanhe seus horários e cancele se precisar.</p>
+            </div>
+        </section>
+        <section>
+            <div class="container">
+                <div id="aviso"></div>
+                <div class="lista" id="lista"></div>
+                <div class="novo"><a href="agendamento.html" class="btn btn-accent">Novo agendamento →</a></div>
+            </div>
+        </section>
+    </main>
+    <footer>
+        <div class="container footer-inner">
+            <p>© <strong>BarberBook</strong> — Todos os direitos reservados</p>
+            <p>Feito para uma experiência de atendimento mais simples.</p>
+        </div>
+    </footer>
+    <script>
+        const lista = document.getElementById('lista');
+        const aviso = document.getElementById('aviso');
+        const ROTULO = { pendente: 'Aguardando confirmação', confirmado: 'Confirmado', cancelado: 'Cancelado', concluido: 'Concluído' };
+
+        function dataBR(iso) { const [a, m, d] = iso.split('-'); return `${d}/${m}/${a}`; }
+        function preco(v) { return 'R$ ' + Number(v).toFixed(2).replace('.', ','); }
+
+        async function api(url, opcoes = {}) {
+            const r = await fetch(url, { ...opcoes, headers: { 'Content-Type': 'application/json' } });
+            if (r.status === 401) { location.href = 'login.html'; throw new Error('Faça login para continuar.'); }
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.erro || 'Erro na requisição');
+            return d;
+        }
+
+        async function cancelar(id) {
+            if (!confirm('Cancelar este agendamento?')) return;
+            try {
+                await api(`/api/meus-agendamentos/${id}/cancelar`, { method: 'PATCH' });
+                await carregar();
+                aviso.textContent = '✓ Agendamento cancelado.';
+            } catch (e) {
+                aviso.textContent = '✗ ' + e.message;
+            }
+        }
+
+        async function carregar() {
+            aviso.textContent = '';
+            try {
+                const itens = await api('/api/meus-agendamentos');
+                lista.replaceChildren();
+                if (!itens.length) { aviso.textContent = 'Você ainda não tem agendamentos.'; return; }
+
+                itens.forEach(a => {
+                    const card = document.createElement('div');
+                    card.className = 'ag';
+
+                    const info = document.createElement('div');
+                    const h = document.createElement('h3');
+                    h.textContent = `${a.servico} — ${preco(a.preco)}`;
+                    const p = document.createElement('p');
+                    p.textContent = `${dataBR(a.data)} às ${a.horario}`;
+                    const st = document.createElement('span');
+                    st.className = 'tag status-' + a.status;
+                    st.textContent = ROTULO[a.status] || a.status;
+                    info.append(h, p, st);
+                    card.append(info);
+
+                    if (a.pode_cancelar) {
+                        const b = document.createElement('button');
+                        b.className = 'btn btn-ghost';
+                        b.textContent = 'Cancelar';
+                        b.onclick = () => cancelar(a.id);
+                        card.append(b);
+                    }
+                    lista.append(card);
+                });
+            } catch (e) {
+                aviso.textContent = '✗ ' + e.message;
+            }
+        }
+        carregar();
+    </script>
+    <script>
+        const nav = document.getElementById('nav');
+        const mt = document.getElementById('menuToggle');
+        const nm = document.getElementById('navMobile');
+        mt?.addEventListener('click', () => { nm.classList.toggle('open'); document.body.classList.toggle('menu-open') });
+        document.querySelectorAll('.nav-mobile a').forEach(a => a.addEventListener('click', () => { nm.classList.remove('open'); document.body.classList.remove('menu-open') }));
+        window.addEventListener('scroll', () => nav.classList.toggle('scrolled', scrollY > 15), { passive: true });
+        document.querySelectorAll('.reveal').forEach(el => new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); e.target._io?.disconnect() } }), { threshold: .12 }).observe(el));
+    </script>
+</body>
+
+</html>

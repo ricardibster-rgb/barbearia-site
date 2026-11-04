@@ -13,13 +13,12 @@ const cookieParser = require('cookie-parser');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --------- Regras de funcionamento ---------
-const ABERTURA = '09:00';
-const FECHAMENTO = '19:00';       // o último horário começa 30 min antes
-const INTERVALO_MIN = 30;
-const DIAS_ABERTOS = [1, 2, 3, 4, 5, 6];    // 0 = domingo, 1 = segunda ... 6 = sábado.
 
-// Data e hora atuais no Brasil, independentemente do fuso do servidor
+const ABERTURA = '09:00';
+const FECHAMENTO = '19:00';       
+const INTERVALO_MIN = 30;
+const DIAS_ABERTOS = [1, 2, 3, 4, 5, 6];   
+
 function agoraBrasil() {
   const partes = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo',
@@ -35,20 +34,12 @@ function agoraBrasil() {
   return { data: `${p.year}-${p.month}-${p.day}`, hora: `${p.hour}:${p.minute}` };
 }
 
-// Confere se a data existe de verdade
 function dataValida(data) {
-  const [hi, mi] = ABERTURA.split(':').map(Number);
-  const [hf, mf] = FECHAMENTO.split(':').map(Number);
-  const lista = [];
-  for (let m = hi * 60 + mi; m < hf * 60 + mf; m += INTERVALO_MIN) {
-    lista.push(
-      String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0')
-    );
-  }
-  return lista;
+  if (typeof data !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(data)) return false;
+  const d = new Date(data + 'T12:00:00Z');
+  return !isNaN(d) && d.toISOString().slice(0, 10) === data;
 }
 
-// Horários do dia que ainda estão livres.
 function gerarHorarios() {
   const [hi, mi] = ABERTURA.split(':').map(Number);
   const [hf, mf] = FECHAMENTO.split(':').map(Number);
@@ -97,21 +88,19 @@ function lerSessao(req, res, next) {
   try {
     req.clienteId = jwt.verify(req.cookies[COOKIE], process.env.JWT_SECRET).id;
   } catch {
-    req.clienteId = null; 
+    req.clienteId = null;
   }
   next();
 }
-app.use(lerSessao);
 
 function exigirLogin (req, res, next) {
   if (!req.clienteId) return res.status(401).json({ erro: 'Faça login para continuar.' });
   next()
 }
 
-
-
 app.use(express.json());
 app.use(cookieParser());
+app.use(lerSessao);
 app.use(express.static(path.join(__dirname, 'public')));
 
 function exigirAdmin(req, res, next) {
@@ -137,55 +126,47 @@ app.get('/api/servicos', async (req, res) => {
   }
 })
 
-app.post('/api/agendamentos', async (req, res) => {
-  const { nome, telefone, servico_id, data, horario } = req.body;
+app.post('/api/agendamentos', exigirLogin, async (req, res) => {
+  const { servico_id, data, horario } = req.body || {};
 
-  if (!nome?.trim() || !telefone?.trim() || !servico_id || !data?.trim() || !horario?.trim()) {
-    return res.status(400).json({ erro: 'Preencha todos os campos' });
+  if (!servico_id || typeof data !== 'string' || typeof horario !== 'string') {
+    return res.status(400).json({ erro: 'Preencha todos os campos.' });
   }
-
-  const tel = telefone.replace(/\D/g, '');
-  if (tel.length < 10 || tel.length > 11) {
-    return res.status(400).json({ erro: 'Telefone inválido. Use DDD + número.' });
-  }
-
   if (!dataValida(data)) {
-    return res.status(400).json({ erro: 'Data inválida.'});
+    return res.status(400).json({ erro: 'Data inválida.' });
   }
 
   try {
     const livres = await horariosLivres(data);
     if (!livres.includes(horario)) {
-      return res.status(409).json({ erro: 'Esse horário não está disponível. Escolha outro.'});
+      return res.status(409).json({ erro: 'Esse horário não está disponível. Escolha outro.' });
     }
-    const servico = await pool.query (
+
+    const servico = await pool.query(
       'SELECT id FROM servicos WHERE id = $1 AND ativo',
       [servico_id]
     );
-    if (!servico.rows.length) {
-      return res.status(400).json({ erro: 'Serviço inválido' });
+    if (servico.rowCount === 0) {
+      return res.status(400).json({ erro: 'Serviço inválido.' });
     }
 
-    const cliente = await pool.query (`INSERT INTO clientes (nome, telefone) VALUES ($1, $2) 
-      ON CONFLICT (telefone) DO UPDATE SET telefone = EXCLUDED.telefone RETURNING id`, 
-      [nome.trim(), tel]);
-
-    const agendamento = await pool.query( 
-      `INSERT INTO agendamentos (cliente_id, servico_id, data, horario) 
-      VALUES ($1, $2, $3, $4) RETURNING id`,
-      [cliente.rows[0].id, servico_id, data, horario]
+    const agendamento = await pool.query(
+      `INSERT INTO agendamentos (cliente_id, servico_id, data, horario)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      [req.clienteId, servico_id, data, horario]
     );
 
     res.status(201).json({ id: agendamento.rows[0].id });
   } catch (error) {
     if (error.code === '23505') {
-      return res.status(409).json({ erro: 'Esse horário já está ocupado. Escolha outro.'});
-    }
-    if (error.code === '22007' || error.code === '22008') {
-      return res.status(400).json({ erro: 'Data ou horário inválido.' })
+      return res.status(409).json({ erro: 'Esse horário já está ocupado. Escolha outro.' });
     }
     if (error.code === '22P02') {
-      return res.status(400).json({ erro: 'Dados inválidos.'});
+      return res.status(400).json({ erro: 'Dados inválidos.' });
+    }
+    if (error.code === '23503') {
+      res.clearCookie(COOKIE);
+      return res.status(401).json({ erro: 'Faça login novamente.' });
     }
     console.error('Erro ao criar agendamento:', error);
     res.status(500).json({ erro: 'Erro ao criar agendamento.' });
@@ -310,7 +291,7 @@ app.put('/api/admin/config', exigirAdmin, async (req, res) => {
   }
 });
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const HASH_FALSO = bcrypt.hashSync('senha-falsa-para-igualar-o-tempo', 10);
 
 app.post('/api/auth/cadastro', async (req, res) => {
@@ -403,6 +384,53 @@ app.get('/api/auth/eu', async (req, res) => {
   } catch (error) {
     console.error('Erro ao buscar cliente:', error);
     res.status(500).json({ erro: 'Erro ao buscar dados.' });
+  }
+});
+
+app.get('/api/meus-agendamentos', exigirLogin, async (req, res) => {
+  const agora = agoraBrasil();
+  try {
+    const r = await pool.query(
+      `SELECT a.id, s.nome AS servico, s.preco,
+              to_char(a.data, 'YYYY-MM-DD') AS data,
+              to_char(a.horario, 'HH24:MI') AS horario,
+              a.status,
+              (a.status IN ('pendente', 'confirmado')
+               AND (a.data + a.horario) > $2::timestamp) AS pode_cancelar
+       FROM agendamentos a
+       JOIN servicos s ON s.id = a.servico_id
+       WHERE a.cliente_id = $1
+       ORDER BY a.data DESC, a.horario DESC`,
+      [req.clienteId, `${agora.data} ${agora.hora}`]
+    );
+    res.json(r.rows);
+  } catch (error) {
+    console.error('Erro ao listar meus agendamentos:', error);
+    res.status(500).json({ erro: 'Erro ao buscar agendamentos.' });
+  }
+});
+
+app.patch('/api/meus-agendamentos/:id/cancelar', exigirLogin, async (req, res) => {
+  const agora = agoraBrasil();
+  try {
+    const r = await pool.query(
+      `UPDATE agendamentos SET status = 'cancelado'
+       WHERE id = $1 AND cliente_id = $2
+         AND status IN ('pendente', 'confirmado')
+         AND (data + horario) > $3::timestamp
+       RETURNING id`,
+      [req.params.id, req.clienteId, `${agora.data} ${agora.hora}`]
+    );
+    if (r.rowCount === 0) {
+      return res.status(409).json({ erro: 'Não foi possível cancelar este agendamento.' });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    if (error.code === '22P02') {
+      return res.status(400).json({ erro: 'ID inválido.' });
+    }
+    console.error('Erro ao cancelar agendamento:', error);
+    res.status(500).json({ erro: 'Erro ao cancelar agendamento.' });
   }
 });
 

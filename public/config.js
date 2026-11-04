@@ -81,3 +81,44 @@ function bindConfig() {
 }
 
 document.addEventListener("DOMContentLoaded", () => configPronta.then(bindConfig));
+
+async function sair() {
+  await fetch("/api/auth/logout", { method: "POST" });
+  location.href = "index.html";
+}
+
+async function atualizarMenuLogin() {
+  let logado = false;
+  try { logado = (await fetch("/api/auth/eu")).ok; } catch {}
+
+  const entrar = document.querySelector('.nav-actions a[href="login.html"]');
+  const mobile = document.querySelector(".nav-mobile");
+
+  function link(texto, href) {
+    const a = document.createElement("a");
+    a.textContent = texto;
+    a.href = href;
+    return a;
+  }
+
+  if (logado) {
+    if (entrar) {
+      entrar.textContent = "Meus agendamentos";
+      entrar.href = "meus-agendamentos.html";
+      const btn = document.createElement("button");
+      btn.className = "btn btn-ghost";
+      btn.textContent = "Sair";
+      btn.onclick = sair;
+      entrar.after(btn);
+    }
+    if (mobile) {
+      const s = link("Sair", "#");
+      s.onclick = e => { e.preventDefault(); sair(); };
+      mobile.append(link("Meus agendamentos", "meus-agendamentos.html"), s);
+    }
+  } else if (mobile) {
+    mobile.append(link("Entrar", "login.html"));
+  }
+}
+
+document.addEventListener("DOMContentLoaded", atualizarMenuLogin);
